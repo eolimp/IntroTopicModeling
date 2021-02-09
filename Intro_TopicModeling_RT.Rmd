@@ -1,0 +1,302 @@
+---
+title: "Introductin to Topic Modeling"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse) 
+library(tidytext)
+library(topicmodels)
+
+```
+
+# Setup 
+
+The dataset includes videos published on RT America YouTube channel from 2015-2017. All non-political videos pertaining to human interest content have been filtered out of the dataset. 
+
+```{r load data}
+
+RT <- read.csv("RT_America.csv")
+
+#Getting rid of the Title variable, since won't use it in the analysis 
+RT <- RT %>% 
+  select(-Title)
+```
+
+# Step 1: Tidy Text dataframe
+
+Tidy text data is a one-term-per-row dataset. This means that each term or token will have one row corresponding to it in each document. We can create one-term-per-row dataset with the help of `tidytext::unnest_tokens()` function. This function takes two main arguments: `input` = the variable from which all of the tokens (i.e, words) will be taken, and `output` = the new variable that will be created containing individual tokens. 
+
+```{r unnesting}
+#The tet that interests us is cointained in "video_transcribe_script" variable.
+RT_tidy <- RT %>% 
+  unnest_tokens(input = video_transcribe_script, output = word)
+
+#See if worked 
+RT_tidy[1:10,]
+```
+
+## Stop words 
+
+### `Stop_words` dataset
+
+As you can see from the "word" column we created above, our list of words includes the words frequently used in speech but which are not useful for the analysis. We can get rid of those words by merging our data with a pre-existing dataset of stop words. One such dataset, which combines three different lexicons of stopwords is called `stop_words`. It is part of `tidytext` and is loaded automatically with this package. Check it out: 
+
+```{r explore stop_words df}
+#stop_words is part of tidytext and is preloaded for you
+head(stop_words)
+
+#stop_words is a regular dataframe with 1149 rows and 2 variables:
+class(stop_words)
+dim(stop_words)
+
+#Let's check out the names of different lexicons it includes:
+unique(stop_words$lexicon)
+
+```
+
+We can use the `stopword` dataset to rid our own data of stop words. The easiest way to do this is using `tidyverse::anti_join()` function. Recall that `antijoi()` gives us the values that are *not* matched, which is exactly what we want (we want to keep the words that are found in our dataset but not found in the stopword list).
+
+```{r get rid of stop words in RT}
+#We will be joining by "word" variable
+names(RT_tidy)
+names(stop_words)
+
+#Keeping words not in stop_words
+RT_final <-  anti_join(RT_tidy, stop_words, by = "word")  
+
+#Compare before and after we dropped the stop words
+RT_tidy[1:10,]
+RT_final[1:10,]
+```
+
+## Numbers
+
+I am using `stringr::str_detect()` function, which is part of `tidyverse`, to identify if a token is a number and not a word. Just to give you a sense of how this function works, here is an example:
+
+```{r}
+#Let's create a vector that includes both characters and numbers.
+words <- c("cat", "mamonth", "111", "Hello")
+words
+
+#srt_detect will examine each element and will produce TRUE/FALSE depending on whether the condition specified in the "pattern" argument is satisfied. The third element get TRUE because it contains a digit.
+str_detect(words, pattern = "[0-9]")
+
+#Let's change the pattern. Now the last element gets TRUE because it contains "Hell"
+str_detect(words, pattern = "Hell")
+
+```
+
+Now let's apply this to our data. I am creating a dummy that takes 1 when `str_detect` identifies an input as a digit and 0 otherwise. `dplyr::case_when()`, which we loaded as part of `tidyverse`, is similar to `ifelse()` except that you can identify multiple conditions. 
+
+```{r}
+RT_final <- RT_final %>% 
+  mutate(number = case_when(str_detect(word, pattern = "[0-9]") == T ~1,  #create new variable that takes 1 if a token is a number
+                            str_detect(word, pattern = "[0-9]") == F ~0)) %>%
+  filter(number == 0) %>%  #keep the rows that are not numbers 
+  dplyr::select(-number) #we no longer need this column
+```
+
+# Step 2: Convert Tidy Text into DTM 
+
+The function that we will be using for analysis does not work with tidy text and requires a Document Term Matrix (DTM). In order to go from *Tidy Text -> DTM*, we can use `tidytext::cast_dtm()`. This turns a "tidy" one-term-per-document-per-row data frame into a DTM. `cast_dtm()` takes 3 main arguments: term = the column with tokens/words, document = document identifier, value = the count, or the number of times each word/token appears in each document. We are missing this latter variable, so will begin by creating it. 
+
+```{r DTM}
+
+RT_dtm <- RT_final %>%
+  count(word, id) %>%   #calculating the number of time each word appears in each document (video/id), this variable is called "n" by default
+  cast_dtm(term = word, document = id, value = n) 
+
+#Hurray, we succeeded in creating a DTM! 
+RT_dtm
+```
+
+# Step 3: Topic Modeling
+
+Now that we have created a DTM, we are ready to run our topic model. We will be using `topicmodels::LDA()` function to create topic models with different number of topics. Argument k in `LDA()` function determines how many topics you would like for your data to be classified into (there are nor rules for how to chose k, it's completely wild). Running LDA, especially for a larger number of topics, might take some time as it is computationally intensive. 
+
+```{r LDA}
+
+#We set the seed, so that the output is predictable
+RT_lda2 <- LDA(RT_dtm, k = 2, control = list(seed = 1234)) #LDA with 2 topics
+RT_lda3 <- LDA(RT_dtm, k = 3, control = list(seed = 1234)) #LDA with 2 topics
+RT_lda5 <- LDA(RT_dtm, k = 5, control = list(seed = 1234)) #LDA with 5 topics
+
+#Just looking at the object won't give us much
+RT_lda2
+```
+
+# Step 4: LDA output to Tidy
+
+LDA does two things: 
+
+1 - it models each topic as a mixture of words ($\beta$ or the per-topic-per-word probabilities)
+2 - it models each document as a mixture of topics ($\gamma$ or per-document-per-topic probabilities) 
+
+We obtain values for $\beta$ or $\gamma$ from an LDA output depending on what we need for analysis. Note that the data structure will differ depending on which coefficient you decide to obtain information for (compare the two resulting datasets below to see for yourself). 
+
+It is useful to look at $\beta$ just to see what the composition of each topic is. After that, since we want to classify each video/document into one of the topics, we are going to be using $\gamma$. 
+
+As you saw above, the output of LDA does not give us much to work with by itself, so we need to transform it back to a tidy text format. We will do that using the `broom::tidy()`, which has been pre-loaded through `tidyverse`. Along the way, we will also obtain the probabilties that we need.
+
+## Beta: Visualizing Topics
+
+```{r tidy and beta}
+#Using the matrix with 2 topics
+##Obtaining beta - the probability of each word being associated with each topic
+RT_beta2 <- tidy(RT_lda2, matrix = "beta")
+head(RT_beta2)
+
+#let's check out a random word
+filter(RT_beta2, term =="russia")
+
+#Betas within each term do not add to 1 
+2.107396e-03	+ 4.572961e-05	
+
+#But all betas within each topic do add up to 1
+RT_beta2 %>%  
+  group_by(topic) %>% 
+  summarise(n = sum(beta))
+
+```
+
+```{r beta for k3 and k5}
+#Repeat for the matrix with 3 and 5 topics
+RT_beta3 <- tidy(RT_lda3, matrix = "beta")
+RT_beta5 <- tidy(RT_lda5, matrix = "beta")
+
+```
+
+Obtaining beta is useful for visualizing the top words associated with each topic. This, in its own turnm is important for naming each topic, i.e., understanding what it stands for (if anything).   
+
+```{r visualizing 2 topics}
+#some prep, selecting top 10 terms
+rt_top_terms <- RT_beta2 %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) #we want the highest to lowest beta
+
+#plotting
+rt_top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%  #this makes sure that your columns are in order
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+```
+
+```{r visualizing 3 topics}
+#some prep, selecting top 10 terms now for 3 topics
+rt_top_terms <- RT_beta3 %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) #we want the highest to lowest beta
+
+rt_top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%  #this makes sure that your columns are in order
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+```
+
+```{r visualizing 5 topics}
+#same for 5
+rt_top_terms <- RT_beta5 %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) #we want the highest to lowest beta
+
+
+#If you wanted to name each facet (do that before running your ggplot function), one way to do it is by recoding your topic variable.
+#rt_top_terms$topic <- recode_factor(rt_top_terms$topic, "1"="International", "2"="Domestic", "3"="Police-Justice", "4" = "Finance", "5" = "Elections")
+
+rt_top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%  #this makes sure that your columns are in order
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+
+#Q: is it fair to drop "lot"? 
+
+```
+
+## Gamma: Assign Each Document to a Topic 
+
+Now that we know what goes into each topic, our goals to to assign each document to one of them. For that, we go back to the output produced by `LDA()` function, tidy it and obtain gamma probabilities. Recall that $\gamma$ are per-document-per-topic probabilities, or the probability that each document belongs to one or the other topic.
+
+```{r tidy + gamma}
+#Using the matrix with 2 topics
+RT_gamma2 <- tidy(RT_lda2, matrix = "gamma")
+
+#Result: a tidy dataframe with a column gamma that gives a probability that each document corresponds to one of the two topics
+head(RT_gamma2)
+
+#Let's check out one random document 
+filter(RT_gamma2, document == 114)
+
+#As you can see, the probabilities are adding up to 1, as they should.
+0.5200343	+ 0.4799657
+
+```
+
+In the output above, we see that document 1859 has a 0.9 probability of belonging to topic 1 - pretty high! Document 29, however, has only 0.0007 percent chance of belonging to topic 1. Let's now see how the same document is modeled as belonging to all 5 topics. 
+
+```{r tidy + gamma k3 and k5}
+#Repeat for k =3 and k=5 
+RT_gamma3 <- tidy(RT_lda3, matrix = "gamma")
+RT_gamma5 <- tidy(RT_lda5, matrix = "gamma")
+
+#Let's check out one random document
+filter(RT_gamma3, document == 114)
+filter(RT_gamma5, document == 114)
+
+```
+
+So, we have obtained gamma, which is a probability with which a document belongs to one topic or the other. How do we make the decision to which topic to assign each document? One way to do it is to simply pick the highest gamma. Let's try it:
+
+```{r picking max gamma}
+#leaving the observations wtih the largest gamma for each document
+RT_gamma2_max <- RT_gamma2 %>% 
+  group_by(document) %>% 
+  slice(which.max(gamma)) %>% 
+  ungroup()
+
+#doing the same for k = 5
+RT_gamma5_max <- RT_gamma5 %>% 
+  group_by(document) %>% 
+  slice(which.max(gamma)) %>% 
+  ungroup()
+
+```
+
+However, this approach comes with some concerns. For instance, while in the 5 topic example, we can be fairly confident that document 114 be classified as topic number three, this was not as obvious in the 2 topic example where the two probabilities were very similar. 
+
+# On which topic does RT_America publish most videos? 
+
+```{r num of videos by topic}
+#On which topic does RT_America publish most videos? 
+
+RT_gamma5_max$topic <- recode_factor(RT_gamma5_max$topic, "1"="International", "2"="Domestic", "3"="Police-Justice", "4" = "Finance", "5" = "Elections")
+
+RT_gamma5_max %>% 
+  group_by(topic) %>% 
+  summarise(n=n()) %>% 
+  arrange(-n)
+
+```
+
+
+
+# Acknowledgments 
+
+- [Text Mining with R](https://www.tidytextmining.com/index.html)
+- [An Introduction to Topic Modeling](https://www.youtube.com/watch?v=IUAHUEy1V0Q&t=271s&ab_channel=SummerInstituteinComputationalSocialScience)
+
+
