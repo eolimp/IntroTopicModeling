@@ -1,2 +1,2 @@
 # IntroTopicModeling
-A brief introductory tutorial on Topic Modeling. 
+An introductory tutorial on Topic Modeling. 
