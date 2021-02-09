@@ -1,2 +1,2 @@
 # IntroTopicModeling
-A brief introduction into Topic Modeling using LDA. 
+A brief introductory tutorial on Topic Modeling. 
